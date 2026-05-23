@@ -1,0 +1,14 @@
+__pycache__/
+.venv/
+.git/
+*.pyc
+*.pyo
+.pytest_cache/
+tests/
+docs/
+CLAUDE.md
+*.md
+*.db
+.env
+dist/
+sandbox-tmp/

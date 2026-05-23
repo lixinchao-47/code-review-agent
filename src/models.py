@@ -115,7 +115,6 @@ class Issue(BaseModel):
     lineno: int                                # 问题所在行号，审查员用它定位源码
     code_snippet: str                          # 问题代码原文，critic 去重时对比此字段
     description: str                           # 自然语言描述：这里为什么有问题
-    suggestion: str                            # 自然语言修复建议：怎么改
     cwe_id: Optional[str] = None               # [安全专用] CWE 漏洞编号，如 "CWE-89"=SQL注入
     estimated_impact: Optional[str] = None     # [性能专用] 预估性能影响，如 "从 3s 降至 0.1s"
     pep8_ref: Optional[str] = None             # [风格专用] 违反的 PEP 8 条目，如 "E501"=行太长
@@ -139,7 +138,7 @@ class Issue(BaseModel):
             return IssueCategory.OTHER
 
     # [B02] LLM 偶发遗漏字段导致 ValidationError，兜底为空字符串/0
-    @field_validator("suggestion", "description", "code_snippet", mode="before")
+    @field_validator("description", "code_snippet", mode="before")
     @classmethod
     def missing_string_fallback(cls, v):
         return v if v is not None else ""
@@ -329,3 +328,19 @@ class FinalReport(BaseModel):
     # [B01-#04] 状态新增 partial —— 沙箱通过但存在需人工处理的问题（如硬编码密钥需建 .env）
     status: str = "running"                                 # running / success / partial / failed
     skipped_items: list[str] = Field(default_factory=list)  # [B01-#04] 需人工介入的建议列表，从 CoderResult 透传
+
+    # [Streamlit HITL] checkpointer 序列化后 isinstance 可能失效，强制 model_dump 再 model_validate
+    @field_validator("action_items", mode="before")
+    @classmethod
+    def coerce_action_items(cls, v):
+        if v is None:
+            return []
+        result = []
+        for item in v:
+            if isinstance(item, dict):
+                result.append(ActionItem.model_validate(item))
+            elif hasattr(item, 'model_dump'):
+                result.append(ActionItem.model_validate(item.model_dump()))
+            else:
+                result.append(item)
+        return result

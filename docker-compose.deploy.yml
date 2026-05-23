@@ -1,0 +1,10 @@
+services:
+  app:
+    image: code-review-agent:latest
+    env_file:
+      - .env
+    environment:
+      - SANDBOX_TMP_HOST=${PWD}/sandbox-tmp
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./sandbox-tmp:/var/sandbox

@@ -1,19 +1,24 @@
 #节点函数集合--图中所有节点的处理函数，按工作流排序
 
 from graph.state import AgentState
-from config import DEEPSEEK_API_KEY, LLM_MODEL
+from config import DEEPSEEK_API_KEY, LLM_MODEL, SANDBOX_TIMEOUT
 from langchain_deepseek import ChatDeepSeek
 from langchain_core.messages import SystemMessage, HumanMessage
 from models import (
     CodeAnalysis,
     ReviewResult,
     ReviewDimension,
+    IssueCategory,
     CriticSummary,
     CoderResult,
     SandboxResult,
     ReflectionResult,
     FinalReport,
 )
+import ast
+import os
+import re
+import shutil
 import subprocess
 import tempfile
 
@@ -158,11 +163,10 @@ def critic_agent(state: AgentState)->dict:
                 f"[{r.dimension.value}] 行{issue.lineno} {issue.severity.value}"
                 f" | {issue.category.value} | {issue.description}"
                 f"\n 代码：{issue.code_snippet}"
-                f"\n 建议：{issue.suggestion}"
             )
 
     summary = structured_llm.invoke([
-        # [B01] critic 四分类判定：丢弃/[需人工]/[跳过]/修复
+        # [B01] critic 三分类判定：丢弃/[需人工]/修复
         SystemMessage(content =(
             "你是代码审查主管。请对以下问题清单：\n"
             "1. 去重：多条指向同一行号+同类问题的合并为一条\n"
@@ -175,22 +179,16 @@ def critic_agent(state: AgentState)->dict:
             "   （纯风格、命名偏好、docstring/类型注解/注释缺失、等价写法建议、\n"
             "   代码组织建议等，只要不影响正确性和安全性，一律丢弃）\n"
             "\n"
-            "   如果是 → 按以下三类处理：\n"
+            "   如果是 → 按以下两类处理：\n"
             "\n"
-            "   [需人工] — 修复依赖当前文件之外的条件（满足任一即标注）：\n"
-            "   · 需要新建文件（.env / config.py 等）\n"
+            "   [需人工] — 满足任一即标注：\n"
+            "   · 问题涉及硬编码凭据/密钥/密码/令牌 → 凭据归宿必须在代码外，单文件改不彻底\n"
+            "   · 需要新建文件\n"
             "   · 需要安装新依赖包\n"
             "   · 需要改动当前文件以外的代码\n"
-            "   · 依赖项目基础设施（环境变量、密钥管理、数据库等）\n"
             "   fix_instruction 描述：问题 + 所需基础设施 + 建立后怎么改\n"
             "\n"
-            "   [跳过] — 问题真实，但自动修复风险高于收益（满足任一即标注）：\n"
-            "   · 修复涉及 3 行以上代码变更\n"
-            "   · 修复会改变函数签名/类接口\n"
-            "   · 修复涉及核心算法/状态机/并发逻辑\n"
-            "   fix_instruction 描述问题 + 建议修复方向\n"
-            "\n"
-            "   修复 — 不属于上述两类：\n"
+            "   修复 — 不属于 [需人工] 的其余问题：\n"
             "   · fix_instruction 必须包含行号 + FROM → TO\n"
             "   · 禁用\"建议\"\"考虑\"\"可改为\"等模糊词"
         )),
@@ -203,7 +201,80 @@ def critic_agent(state: AgentState)->dict:
     # [Bug #5] LLM 返回 None 时兜底
     if summary is None:
         return {}
+    # 确定性兜底：凭据类问题 LLM 容易误判为 [修复]，枚举 + 关键词双重确认后强制标 [需人工]
+    _guard_credential_manual_tag(summary)
+    # 剥离 LLM 自发造的 [修复] 标签，防止下游 coder 因不认识该标签而误入 skipped_items
+    _strip_fake_tags(summary)
     return {"critic_summary": summary}
+
+CREDENTIAL_KEYWORDS = re.compile(
+    r"os\.environ|getenv|环境变量|\.env|配置文件|外部存储|密钥管理|Secrets?\s*Manager",
+    re.IGNORECASE,
+)
+
+def _strip_fake_tags(summary: CriticSummary) -> None:
+    """剥离 LLM 自发造的 [修复] 标签，防止下游 coder 因不认识而误入 skipped_items"""
+    if not summary.action_plan:
+        return
+    for item in summary.action_plan:
+        if "[需人工]" in item.fix_instruction:
+            continue
+        if item.fix_instruction.startswith("[修复]"):
+            item.fix_instruction = item.fix_instruction[len("[修复]"):].strip()
+
+
+def _guard_credential_manual_tag(summary: CriticSummary) -> None:
+    """凭据类问题确定性兜底：category=SENSITIVE_INFO + 修复方案涉及外部化 → 强制 [需人工]"""
+    if not summary.action_plan:
+        return
+    for item in summary.action_plan:
+        if "[需人工]" in item.fix_instruction:
+            continue
+        if item.category != IssueCategory.SENSITIVE_INFO:
+            continue
+        if CREDENTIAL_KEYWORDS.search(item.fix_instruction):
+            item.fix_instruction = "[需人工] " + item.fix_instruction
+
+def _detect_scope_violations(original_code: str, fixed_code: str) -> list[str]:
+    """检测 coder 是否将函数内语句提升到模块级（改作用域硬禁令兜底）
+
+    只放行 import/from import，其余从函数内→模块级的移动一律标记。
+    """
+    if not original_code or not fixed_code:
+        return []
+    try:
+        orig_tree = ast.parse(original_code)
+        fixed_tree = ast.parse(fixed_code)
+    except SyntaxError:
+        return []
+
+    def _non_import_stmts_in_funcs(tree):
+        stmts = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for stmt in node.body:
+                    if not isinstance(stmt, (ast.Import, ast.ImportFrom)):
+                        try:
+                            stmts.add(ast.unparse(stmt))
+                        except Exception:
+                            pass
+        return stmts
+
+    func_stmts = _non_import_stmts_in_funcs(orig_tree)
+
+    violations = []
+    for stmt in fixed_tree.body:
+        if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+            continue
+        try:
+            unparsed = ast.unparse(stmt)
+        except Exception:
+            continue
+        if unparsed in func_stmts:
+            violations.append(f"[作用域变更] L{stmt.lineno}: {unparsed[:100]}")
+
+    return violations
+
 
 def coder_agent(state: AgentState)->dict:
     """修复节点：按action_plan的fix_instruction逐一修改代码，输出CoderResult"""
@@ -212,15 +283,34 @@ def coder_agent(state: AgentState)->dict:
 
     #将action_plan的每条修复指令展开成可读文本
     plan_text = []
+    skipped_from_critic = []  # [需人工] 条目代码级拦截，不传给 coder
+    protected_lines = set()   # 含 [需人工] 条目的行号，整行锁定，防同行的非 [需人工] 条目绕过
     # [Bug #5] 消费端守卫：上游 critic_agent 可能返回 {}，避免 state['critic_summary'].action_plan 炸
     critic = state.get('critic_summary')
     if critic is None:
         return {}
     for item in critic.action_plan:
+        if "[需人工]" in item.fix_instruction:
+            protected_lines.add(item.lineno)
+            skipped_from_critic.append(f"行{item.lineno}: {item.fix_instruction}")
+            continue
+    for item in critic.action_plan:
+        if "[需人工]" in item.fix_instruction:
+            continue  # 已处理
+        if item.lineno in protected_lines:
+            skipped_from_critic.append(f"行{item.lineno}: (同行动态锁定) {item.fix_instruction}")
+            continue
         plan_text.append(
             f" [{item.priority}] 行{item.lineno} | {item.severity.value}/{item.category.value}\n"
             f" 指令：{item.fix_instruction}"
         )
+
+    if not plan_text:
+        # 全部条目都是 [需人工]，无需调用 LLM
+        return {"coder_result": CoderResult(
+            fixed_code=state.get("original_code", ""),
+            skipped_items=skipped_from_critic,
+        )}
 
     extra_context = ""
     if state['reflection_notes']:
@@ -240,10 +330,9 @@ def coder_agent(state: AgentState)->dict:
             "1. 禁止改名 —— 函数名、类名、变量名、参数名一律不动\n"
             "2. 禁止改签名 —— 不增删参数、不改返回类型\n"
             "3. 禁止改作用域 —— 不得把局部变量提升为全局、或把全局降为局部\n\n"
-            # --- 执行规则：标签判定，硬禁令违规静默丢弃 ---
+            # --- 执行规则：硬禁令违规静默丢弃 ---
             "判断规则：\n"
-            "- fix_instruction 含 [需人工] 或 [跳过] → 跳过，写入 skipped_items\n"
-            "- fix_instruction 无标签 → 先过硬禁令检查：\n"
+            "- 先过硬禁令检查：\n"
             "  · 违反硬禁令（需改名/改签名/改作用域）→ 跳过该条，静默丢弃\n"
             "  · 未违反硬禁令 → 严格按 fix_instruction 逐一修复\n"
             "- 参考优先级：human_feedback > reflection_notes > fix_instruction\n"
@@ -253,50 +342,98 @@ def coder_agent(state: AgentState)->dict:
         )),
         HumanMessage(content=(
             f"原始代码：\n\n```{state['original_code']}```\n\n"
-            f"修复计划：（共{len(critic.action_plan)}条：\n"
+            f"修复计划：（共{len(plan_text)}条）：\n"
             + "\n".join(plan_text)
-            # 提示含标签条目必须跳过
-            + "\n\n注意：含 [需人工] 或 [跳过] 标记的条目，跳过修改，将其内容原样放入 skipped_items 列表。"
             + extra_context
         )),
     ])
     # [Bug #5] LLM 返回 None 时兜底
     if result is None:
-        return {}
+        return {"coder_result": CoderResult(
+            fixed_code=state.get("original_code", ""),
+            skipped_items=skipped_from_critic,
+        )}
+    # skipped_items 的唯一合法来源是 critic + guard 函数的判定，
+    # coder 不应贡献 skipped_items（硬禁令违规 → 静默丢弃，修不了 → 重试）
+    result.skipped_items = skipped_from_critic
+    # 代码级硬禁令兜底：检测 coder 是否将函数内语句提升到模块级
+    scope_violations = _detect_scope_violations(
+        state.get("original_code", ""), result.fixed_code
+    )
+    if scope_violations:
+        result.notes = ("[警告] 以下语句被从函数内提升到模块级，可能改变程序行为（如共享连接/状态）：\n"
+                        + "\n".join(scope_violations)
+                        + ("\n" + result.notes if result.notes else ""))
     return {"coder_result": result}
 
-def sandbox_executor(state: AgentState)->dict:
+def _docker_sandbox(script_path: str) -> SandboxResult:
+    """Docker 容器沙箱：network=none, memory=128m, non-root"""
+    host_dir = os.environ.get('SANDBOX_TMP_HOST', '/tmp')
+    filename = os.path.basename(script_path)
+    host_path = os.path.join(host_dir, filename)
+    try:
+        result = subprocess.run(
+            [
+                'docker', 'run', '--rm',
+                '--network=none',
+                '--memory=128m',
+                '--memory-swap=128m',
+                '--cpus=0.5',
+                '-v', f'{host_path}:/sandbox/code.py:ro',
+                'code-review-sandbox',
+                'python3', '-W', 'error', '/sandbox/code.py',
+            ],
+            capture_output=True, text=True,
+            timeout=SANDBOX_TIMEOUT,
+        )
+        return SandboxResult(
+            exit_code=result.returncode,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            passed=(result.returncode == 0),
+        )
+    except subprocess.TimeoutExpired:
+        return SandboxResult(exit_code=-1, stdout='', stderr='执行超时', passed=False)
+
+
+def _subprocess_sandbox(script_path: str) -> SandboxResult:
+    """降级方案：subprocess 直接执行（Docker 不可用时使用）"""
+    try:
+        result = subprocess.run(
+            ['python3', '-W', 'error', script_path],
+            capture_output=True, text=True,
+            timeout=SANDBOX_TIMEOUT,
+        )
+        return SandboxResult(
+            exit_code=result.returncode,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            passed=(result.returncode == 0),
+        )
+    except subprocess.TimeoutExpired:
+        return SandboxResult(exit_code=-1, stdout='', stderr='执行超时', passed=False)
+
+
+def sandbox_executor(state: AgentState) -> dict:
     """沙箱节点：执行修复后的代码，验证能否正常运行"""
-    # [Bug #5] 消费端守卫：上游 coder_agent 可能返回 {}
     coder = state.get('coder_result')
     if coder is None:
         return {'sandbox_result': SandboxResult(exit_code=-1, stderr='修复代码为空', passed=False)}
     fixed_code = coder.fixed_code
 
-    #将修复代码写入临时文件
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False,
+                                       dir='/var/sandbox' if os.path.isdir('/var/sandbox') else None) as f:
         f.write(fixed_code)
-        tmp_path = f.name #获取文件路径
+        tmp_path = f.name
 
-    #在子程序中执行，设置超时防止死循环
     try:
-        result = subprocess.run(
-            ['python3', '-W', 'error', tmp_path],
-            capture_output=True, text=True, timeout=10,
-        )
-        sandbox = SandboxResult(
-            exit_code = result.returncode,
-            stdout = result.stdout,
-            stderr = result.stderr,
-            passed = (result.returncode == 0),
-        )
-    except subprocess.TimeoutExpired:
-        sandbox = SandboxResult(
-            exit_code=-1,
-            stdout='',
-            stderr='执行超时（超过10秒）',
-            passed=False,
-        )
+        if shutil.which('docker'):
+            sandbox = _docker_sandbox(tmp_path)
+        else:
+            sandbox = _subprocess_sandbox(tmp_path)
+    finally:
+        os.unlink(tmp_path)
+
     return {'sandbox_result': sandbox}
 
 def reflect_node(state: AgentState)->dict:
@@ -363,7 +500,7 @@ def output_node(state: AgentState) -> dict:
     fixed_code = coder.fixed_code if coder else ""
     changes = coder.changes if coder else []
     sandbox_passed = sandbox.passed if sandbox else False
-    # [B01-#04] 收集 [需人工] 和 [跳过] 的建议
+    # [B01-#04] 收集 [需人工] 的建议
     skipped = coder.skipped_items if coder else []
 
     score_before = critic.score_before if critic else 100
@@ -378,7 +515,7 @@ def output_node(state: AgentState) -> dict:
         # [B03] 沙箱失败扣 10 分
         score_after = max(score_before - 10, 0)
 
-    # [B01-#04] 状态判定：有跳过项 → partial（沙箱通过但含 [需人工] 或 [跳过] 建议）
+    # [B01-#04] 状态判定：有跳过项 → partial（沙箱通过但含 [需人工] 建议）
     if not sandbox_passed:
         status = "failed"
     elif skipped:

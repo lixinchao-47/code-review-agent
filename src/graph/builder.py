@@ -118,7 +118,7 @@ def build_graph():
         "reflect_node",
         retry_or_fail,
         {
-            "output_node": "output_node",
+            "human_review": "human_review",
             "coder_agent": "coder_agent",
         }
     )

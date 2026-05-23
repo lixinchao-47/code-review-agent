@@ -127,7 +127,7 @@ reflect_node(retry<3) → coder_agent
 |--------|--------|----------|------|
 | `sandbox_check` | `sandbox_executor` | `sandbox_result.exit_code == 0` | True → `human_review` / False → `reflect_node` |
 | `human_check` | `human_review` | `human_feedback == ""` (空字符串=确认) | True → `output_node` / False → `coder_agent` |
-| `retry_check` | `reflect_node` | `retry_count < MAX_RETRY` | True → `coder_agent` / False → `output_node`(failed) |
+| `retry_check` | `reflect_node` | `retry_count < MAX_RETRY` | True → `coder_agent` / False → `human_review` |
 
 ## 4. Send API 并行设计
 
@@ -226,7 +226,7 @@ def build_graph() -> StateGraph:
     # 反思条件边
     workflow.add_conditional_edges("reflect_node", retry_or_fail, {
         "coder_agent": "coder_agent",
-        "output_node": "output_node",
+        "human_review": "human_review",
     })
 
     # 终点
