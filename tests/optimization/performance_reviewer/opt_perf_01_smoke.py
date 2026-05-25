@@ -48,7 +48,7 @@ if __name__ == "__main__":
 
     # --- prompt 文本校验 ---
     print("--- prompt 文本校验 ---")
-    nodes_src = open(SRC_DIR + "/graph/nodes.py").read()
+    nodes_src = open(SRC_DIR + "/graph/nodes/reviewers.py").read()
     for kw in REQUIRED_PROMPT_KEYWORDS:
         ok = kw in nodes_src
         total += 1; passed += 1 if ok else 0

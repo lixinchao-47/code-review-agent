@@ -21,7 +21,7 @@ if SRC_DIR not in sys.path:
 
 import streamlit as st
 
-from config import LLM_MODEL, DEEPSEEK_API_KEY, MAX_RETRY
+from config import LLM_MODEL, MAX_RETRY
 from graph.builder import build_graph
 from graph.state import INITIAL_STATE, AgentState
 
@@ -240,6 +240,13 @@ def render_code_diff(original, fixed):
     with col2:
         st.caption("修复后代码")
         st.code(fixed, language="python", line_numbers=True)
+
+
+def render_notes(notes: str):
+    """展示审查警告（如作用域变更检测）"""
+    if not notes:
+        return
+    st.warning(f"**【警告】**\n\n{notes}")
 
 
 def render_skipped_items(items):
@@ -481,6 +488,8 @@ def main():
                         st.caption(f"行 {ch.lineno}: {ch.reason}")
             if coder and coder.skipped_items:
                 render_skipped_items(coder.skipped_items)
+            if coder and coder.notes:
+                render_notes(coder.notes)
 
             st.divider()
             st.markdown("**请选择操作：**")
@@ -499,15 +508,13 @@ def main():
                     "输入修改意见（例如：用 subprocess.run 替换 os.system）",
                     key="human_feedback_input",
                 )
-                f1, f2 = st.columns([1, 3])
-                with f1:
-                    if st.button("提交意见", type="primary"):
-                        if feedback.strip():
-                            _continue_from_human(feedback.strip())
-                            st.session_state.show_feedback_input = False
-                            st.rerun()
-                        else:
-                            st.warning("意见不能为空")
+                if st.button("提交意见", type="primary"):
+                    if feedback.strip():
+                        _continue_from_human(feedback.strip())
+                        st.session_state.show_feedback_input = False
+                        st.rerun()
+                    else:
+                        st.warning("意见不能为空")
 
         # ============ done ============
         elif st.session_state.review_state == "done":
@@ -540,6 +547,7 @@ def main():
                 st.caption(f"共 {len(issues)} 个问题")
                 render_issues(issues)
                 render_skipped_items(report.skipped_items)
+                render_notes(report.notes)
 
             with tab2:
                 render_code_diff(report.original_code, report.fixed_code)

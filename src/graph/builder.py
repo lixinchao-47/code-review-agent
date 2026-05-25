@@ -2,7 +2,7 @@
 
 from langgraph.graph import StateGraph, END
 from langgraph.types import Send
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.memory import InMemorySaver
 from graph.state import AgentState
 from graph.nodes import (
     code_parser,
@@ -126,7 +126,7 @@ def build_graph():
     # 10. 编译图：设置 HITL 断点 + 内存检查点
     app = workflow.compile(
     interrupt_before=["human_review"],
-    checkpointer=MemorySaver(), #每次节点执行完后自动保存 state 快照(存于内存)
+    checkpointer=InMemorySaver(),
     )
 
     return app

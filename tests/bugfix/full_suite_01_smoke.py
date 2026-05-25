@@ -139,7 +139,7 @@ if __name__ == "__main__":
     # --- B05 ---
     print()
     print("--- [B05] sandbox -W error ---")
-    ok = "'python3', '-W', 'error'" in open(SRC_DIR + "/graph/nodes.py").read()
+    ok = "'python3', '-W', 'error'" in open(SRC_DIR + "/graph/nodes/sandbox.py").read()
     total += 1; passed += 1 if ok else 0
     print(f"  {'✅' if ok else '❌'} sandbox_executor 使用 -W error")
 

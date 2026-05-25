@@ -34,7 +34,7 @@ code_parser → Send API → [security, performance, style] (parallel reviews)
 - `src/models.py` — 12 Pydantic models + 4 enums. Bottom of the stack, imported by everything.
 - `src/config.py` — Reads `.env`, exports `DEEPSEEK_API_KEY`, `LLM_MODEL`, `MAX_RETRY`, etc.
 - `src/graph/state.py` — `AgentState` TypedDict + `INITIAL_STATE`. `review_results` uses `Annotated[list, operator.add]` for parallel writes.
-- `src/graph/nodes.py` — All 10 node functions. Imports models as single `from models import (...)` block. `reflect_node` creates its own `ChatDeepSeek(temperature=0.3)` instead of using the global `llm` (0.1).
+- `src/graph/nodes/` — 4 modules: `reviewers.py` (code_parser + 3 reviewers), `critic_coder.py` (critic + coder + guards), `sandbox.py` (sandbox + docker/subprocess), `terminal.py` (reflect + HITL + output).
 - `src/graph/builder.py` — Conditional edge routing functions + `build_graph()`.
 - `scripts/run.py` — Entry point that injects `src/` into `sys.path` before any imports.
 - `docs/` — 6 design docs: `requirements.md`, `state-design.md`, `agents-design.md`, `models-design.md`, `graph-design.md`, `dev-log.md`
@@ -46,13 +46,13 @@ code_parser → Send API → [security, performance, style] (parallel reviews)
 - LLM: DeepSeek-V3 (`deepseek-chat`), fallback GPT-4o-mini
 - Sandbox: subprocess (current, stage 2); Docker (future, stage 6: network=none, memory=128MB)
 - Frontend: Streamlit (future)
-- Checkpointer: MemorySaver (future: SqliteSaver / PostgresSaver)
+- Checkpointer: InMemorySaver (future: SqliteSaver / PostgresSaver)
 
 ## Critical API conventions
 
 - `from langgraph.types import Send` (NOT `langgraph.graph`)
 - `from langgraph.graph import StateGraph, END`
-- `from langgraph.checkpoint.memory import MemorySaver`
+- `from langgraph.checkpoint.memory import InMemorySaver`
 - `from langchain_deepseek import ChatDeepSeek`
 - `from langchain_core.messages import SystemMessage, HumanMessage`
 - Structured output via `llm.with_structured_output(pydantic_model)`

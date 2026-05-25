@@ -328,6 +328,7 @@ class FinalReport(BaseModel):
     # [B01-#04] 状态新增 partial —— 沙箱通过但存在需人工处理的问题（如硬编码密钥需建 .env）
     status: str = "running"                                 # running / success / partial / failed
     skipped_items: list[str] = Field(default_factory=list)  # [B01-#04] 需人工介入的建议列表，从 CoderResult 透传
+    notes: str = ""                                         # 审查过程中的警告/备注（如作用域变更检测），前端展示
 
     # [Streamlit HITL] checkpointer 序列化后 isinstance 可能失效，强制 model_dump 再 model_validate
     @field_validator("action_items", mode="before")

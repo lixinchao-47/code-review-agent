@@ -98,7 +98,7 @@ print(add(1, 2))
 
     # 检测 4：确认 sandbox_executor 源码使用了 -W error
     print("--- 检测 4：sandbox_executor 源码确认 ---")
-    nodes_path = Path(SRC_DIR) / "graph" / "nodes.py"
+    nodes_path = Path(SRC_DIR) / "graph" / "nodes" / "sandbox.py"
     content = nodes_path.read_text()
     if "'python3', '-W', 'error', tmp_path" in content:
         print(f"  ✅ sandbox_executor 已使用 -W error 标志")

@@ -13,6 +13,9 @@ __pycache__/
 .vscode/
 .idea/
 
+# SQLite 数据库文件（checkpoint 持久化）
+*.db
+
 # 构建产物
 src/code_review_agent.egg-info/
 

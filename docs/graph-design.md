@@ -242,7 +242,7 @@ def build_graph() -> StateGraph:
 ```python
 # compile 时设置断点
 graph = workflow.compile(
-    checkpointer=checkpointer,  # MemorySaver 持久化
+    checkpointer=checkpointer,  # InMemorySaver 持久化
     interrupt_before=["human_review"],
 )
 ```
@@ -262,12 +262,12 @@ if user_provided_feedback:
 
 ## 8. Checkpointer 持持久化
 
-使用 `MemorySaver` 作为 Checkpointer，每次 state 更新自动保存。
+使用 `InMemorySaver` 作为 Checkpointer，每次 state 更新自动保存。
 
 ```python
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.memory import InMemorySaver
 
-checkpointer = MemorySaver()
+checkpointer = InMemorySaver()
 graph = workflow.compile(checkpointer=checkpointer, interrupt_before=["human_review"])
 
 # 每次调用带上 thread_id，同一会话共享 state
@@ -275,7 +275,7 @@ config = {"configurable": {"thread_id": "user-session-123"}}
 graph.invoke(initial_state, config)
 ```
 
-### MemorySaver 的作用
+### InMemorySaver 的作用
 
 - HITL 暂停时 state 被持久化到内存，前端可随时 resume
 - 同一 thread_id 多次 invoke 共享同一 state 链

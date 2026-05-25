@@ -16,7 +16,7 @@ if SRC_DIR not in sys.path:
 
 import tempfile
 import os
-from graph.nodes import _subprocess_sandbox
+from graph.nodes.sandbox import _subprocess_sandbox
 from models import SandboxResult
 
 if __name__ == "__main__":

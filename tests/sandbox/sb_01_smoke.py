@@ -15,7 +15,8 @@ if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
 from graph.builder import build_graph
-from graph.nodes import sandbox_executor, _docker_sandbox, _subprocess_sandbox
+from graph.nodes import sandbox_executor
+from graph.nodes.sandbox import _docker_sandbox, _subprocess_sandbox
 from models import SandboxResult
 
 if __name__ == "__main__":

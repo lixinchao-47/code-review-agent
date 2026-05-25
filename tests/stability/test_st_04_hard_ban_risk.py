@@ -220,6 +220,11 @@ async def main():
                         if dk in inst and "[需人工]" not in inst:
                             round_errors.append(f"critic 危险指令: '{dk}' in '{inst[:60]}'")
 
+            # 验证 coder.notes 作用域变更检测是否产出警告
+            scope_issues = [e for e in round_errors if "作用域" in e]
+            if scope_issues and (not coder or not coder.notes):
+                round_errors.append("coder.notes 缺失: 作用域违规已发生但 _detect_scope_violations 未产出警告")
+
             errors_found.append(round_errors)
 
             total_actions = len(critic.action_plan) if critic else 0
