@@ -12,3 +12,10 @@ CLAUDE.md
 .env
 dist/
 sandbox-tmp/
+sandbox/
+.gitignore
+docker-compose*.yml
+docker-push.sh
+.egg-info/
+.vscode/
+.idea/

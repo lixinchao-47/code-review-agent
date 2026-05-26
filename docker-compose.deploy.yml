@@ -1,10 +1,28 @@
+# 部署模式：从阿里云 ACR 拉取镜像，不执行 build 步骤
+# 用法：docker compose -f docker-compose.deploy.yml pull && docker compose -f docker-compose.deploy.yml up -d
+x-acr: &acr crpi-g05pgblu4dg99gld.cn-shanghai.personal.cr.aliyuncs.com/lixinchao
+
 services:
+  # 沙箱镜像 —— 拉取到本地即可，sandbox_executor 通过 docker.sock 调用
+  sandbox:
+    image: ${ACR:-crpi-g05pgblu4dg99gld.cn-shanghai.personal.cr.aliyuncs.com/lixinchao}/code-review-sandbox:latest
+    command: ["echo", "sandbox image pulled"]
+
+  # 主应用
   app:
-    image: code-review-agent:latest
+    image: ${ACR:-crpi-g05pgblu4dg99gld.cn-shanghai.personal.cr.aliyuncs.com/lixinchao}/code-review-agent:latest
+    depends_on:
+      sandbox:
+        condition: service_completed_successfully
     env_file:
       - .env
     environment:
-      - SANDBOX_TMP_HOST=${PWD}/sandbox-tmp
+      - SANDBOX_TMP_HOST=/tmp
+      - STREAMLIT_MODE=true
+      - PORT=8501
+    ports:
+      - "8501:8501"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./sandbox-tmp:/var/sandbox
+    restart: unless-stopped

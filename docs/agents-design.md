@@ -33,10 +33,9 @@
 
 ## 3. LLM 统一调用方式
 
-所有 Agent 使用相同的 LLM 调用模式：
+所有 Agent 共享同一个 LLM 实例，定义在 `src/graph/nodes/_llm.py`：
 
 ```python
-from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_deepseek import ChatDeepSeek
 from config import DEEPSEEK_API_KEY, LLM_MODEL
 
@@ -45,23 +44,15 @@ llm = ChatDeepSeek(
     api_key=DEEPSEEK_API_KEY,
     temperature=0.1,              # 低温度保证输出稳定
 )
-
-def call_llm(system_prompt: str, user_message: str, output_structure=None) -> str:
-    """统一 LLM 调用封装"""
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=user_message),
-    ]
-    if output_structure:
-        llm_with_structure = llm.with_structured_output(output_structure)
-        return llm_with_structure.invoke(messages)
-    return llm.invoke(messages).content
 ```
+
+各节点通过 `from graph.nodes._llm import llm` 导入共享实例。需要结构化输出时调用 `llm.with_structured_output(PydanticModel)`。
 
 **设计决策:**
 - temperature=0.1 而非 0，保留极轻微随机性避免卡死循环
 - 审查类 Agent 使用 `with_structured_output` 强制返回 Pydantic 结构
-- 不需要结构化输出的（reflect_node）直接返回字符串
+- `reflect_node` 使用独立 `ChatDeepSeek(temperature=0.3)` 实例 —— 唯一 temperature != 0.1 的节点
+- 所有 `invoke()` 调用点都有 None 守卫（LLM 结构化输出解析失败时兜底）
 
 ---
 
@@ -71,45 +62,15 @@ def call_llm(system_prompt: str, user_message: str, output_structure=None) -> st
 
 **定位:** 理解代码，不是审查代码。将原始文本提取为结构化摘要。
 
-**System Prompt:**
+**System Prompt（简化版，靠 `with_structured_output(CodeAnalysis)` 强制 schema）:**
 
 ```
-你是一个 Python 代码分析专家。你的任务是读懂代码，提取结构化信息。
-不要审查代码好坏，只做客观描述。
-
-请分析以下代码，输出 JSON 格式：
-{
-  "functions": [                          // 所有函数
-    {
-      "name": "函数名",
-      "lineno": 起始行号,
-      "params": ["参数1", "参数2"],
-      "decorators": ["@decorator"],
-      "docstring": "docstring 内容或 null",
-      "body_summary": "一句话描述函数做了什么"
-    }
-  ],
-  "classes": [                            // 所有类
-    {
-      "name": "类名",
-      "lineno": 起始行号,
-      "methods": ["方法1", "方法2"],
-      "base_classes": ["父类1"],
-      "docstring": "docstring 内容或 null"
-    }
-  ],
-  "imports": ["import os", "from typing import List"],
-  "global_statements": [                  // 模块级别的关键语句描述
-    "第5行: 定义了常量 MAX_SIZE = 1024",
-    "第10行: 以写模式打开文件 data.csv"
-  ],
-  "overview": "一句话总结代码功能"
-}
+你是一个代码结构分析专家，只做客观的结构提取，不给审查意见。
 ```
 
-**User Message:** 直接传入 `original_code`。
+**User Message:** 直接传入原始代码。
 
-**temperature:** 0（解析任务不需要创造性）
+**输出模型:** `CodeAnalysis`（通过 `with_structured_output` 约束字段，Prompt 不再手写 JSON schema）
 
 ---
 
@@ -117,46 +78,19 @@ def call_llm(system_prompt: str, user_message: str, output_structure=None) -> st
 
 **定位:** 只关注安全，不管性能和风格。
 
-**System Prompt:**
+**Prompt 策略（principle-driven，详见 `src/graph/nodes/reviewers.py`）:**
 
-```
-你是一个资深应用安全工程师，专门审查 Python 代码的安全漏洞。
-只关注安全问题，不关注性能或代码风格。
+核心原则：只报告确认存在的安全漏洞，不推测潜在风险。
 
-检查清单：
-- SQL 注入: 字符串拼接 SQL、未使用参数化查询
-- 命令注入: os.system()/subprocess 使用 shell=True 且拼接用户输入
-- 路径遍历: 文件路径直接拼接用户输入、未用 os.path.abspath 校验
-- 敏感信息: API Key/密码/Token 硬编码在代码中
-- 不安全反序列化: pickle.load() 接受不可信数据
-- 不安全随机数: 使用 random 模块生成密码/Token（应用 secrets 模块）
-- 权限问题: os.chmod 设置过于宽松权限（如 0o777）
-- 代码执行: eval()/exec() 执行不可信输入
-- XXE/XML 注入: xml.etree 解析未禁用外部实体
-- 弱加密: 使用 MD5/SHA1 做密码哈希、DES/RC4 做加密
+确认标准（双条件必须同时满足）：
+1. 代码中存在危险操作（SQL 拼接/命令执行/路径拼接/硬编码凭据/反序列化/弱加密）
+2. 该危险操作的输入来自不可信数据源
 
-对每个发现的问题输出：
-{
-  "issues": [
-    {
-      "severity": "critical|high|medium|low",
-      "category": "注入|敏感信息|加密|权限|反序列化|其他",
-      "lineno": 问题所在行号,
-      "code_snippet": "问题代码片段（原本复制）",
-      "description": "问题描述，说明为什么是漏洞",
-      "suggestion": "修复建议",
-      "cwe_id": "CWE-xxx 编号（如 CWE-89 for SQL 注入）"
-    }
-  ]
-}
+仅满足一条 → 不报告。硬编码凭据是唯一例外（凭据本身即是漏洞，不需要攻击面）。
 
-如果没有任何安全问题，返回 {"issues": []}
-不要编造不存在的问题。如果代码太简单（如单行 print），返回空列表即可。
-```
+每条问题附带 `cwe_id`（CWE 漏洞编号），增加报告专业性和可信度。
 
-**为什么要有 code_snippet:** Critic Agent 去重时需要比对代码片段判断是否为同一问题。
-
-**为什么要有 cwe_id:** 增加报告的专业性和可信度。
+无确认漏洞 → `issues` 返回空列表 `[]`。
 
 ---
 
@@ -164,43 +98,15 @@ def call_llm(system_prompt: str, user_message: str, output_structure=None) -> st
 
 **定位:** 只关注性能瓶颈和低效写法。
 
-**System Prompt:**
+**Prompt 策略（principle-driven，详见 `src/graph/nodes/reviewers.py`）:**
 
-```
-你是一个 Python 性能优化专家，专门审查代码的性能问题。
-只关注性能问题，不关注安全或风格。
+核心原则：只报告从代码本身可直接确认的低效模式。无法确认数据规模 → 不报告，宁漏勿错。
 
-检查清单：
-- 时间复杂度过高: O(n²) 可以优化为 O(n) 的情况
-- 循环内重复计算: 不变的表达式放在循环内
-- 不必要的 I/O: 循环内读写文件/数据库（N+1 问题）
-- 低效数据结构: 该用 set/dict 却用了 list 做查找
-- 内存浪费: 大列表一次性加载到内存、未用生成器
-- 字符串拼接: 循环内用 += 拼接大量字符串（应用 join）
-- 重复函数调用: 循环内反复调用同一函数取相同结果
-- 全局解释器锁: 提示 CPU 密集任务可用多进程
-- 正则编译: re.compile 预编译可复用的正则
-- 连接池缺失: requests.get 频繁创建连接
+按五个维度审查：时间复杂度、空间复杂度、I/O、数据结构、重复计算。
 
-对每个发现的问题输出：
-{
-  "issues": [
-    {
-      "severity": "high|medium|low",
-      "category": "时间复杂度|空间复杂度|I/O|数据结构|重复计算|其他",
-      "lineno": 问题所在行号,
-      "code_snippet": "问题代码片段",
-      "description": "为什么这里存在性能问题",
-      "suggestion": "优化建议（含优化后复杂度）",
-      "estimated_impact": "预估影响（如：输入 10000 条时从 3 秒降至 0.1 秒）"
-    }
-  ]
-}
+每条问题附带 `estimated_impact`（量化预估），帮助 Critic Agent 排序时量化优先级。
 
-如果没有任何性能问题，返回 {"issues": []}
-```
-
-**estimated_impact 的作用:** 帮助 Critic Agent 排序时量化优先级。
+无确认问题 → `issues` 返回空列表 `[]`。
 
 ---
 
@@ -208,45 +114,17 @@ def call_llm(system_prompt: str, user_message: str, output_structure=None) -> st
 
 **定位:** 只关注代码可读性和规范性。
 
-**System Prompt:**
+**Prompt 策略（principle-driven，详见 `src/graph/nodes/reviewers.py`）:**
 
-```
-你是一个 Python 代码风格评审专家，专门审查代码的可读性和规范性。
-只关注风格问题，不关注安全或性能。
+核心原则：报告客观的风格违规，不报告个人偏好。
 
-检查清单（基于 PEP 8 + 行业最佳实践）：
-- 命名规范: 变量/函数用 snake_case，类用 PascalCase，常量用 UPPER_CASE
-- 函数长度: 单个函数超过 50 行应拆分
-- 参数过多: 函数参数超过 5 个考虑封装为对象
-- 嵌套过深: 嵌套层级超过 4 层降低可读性
-- 魔法数字: 直接使用未命名的数字常量（如 if x > 42）
-- 重复代码: 相同逻辑出现在多个位置
-- 注释缺失: 复杂逻辑无注释、公共函数无 docstring
-- 注释质量: 注释写"做什么"而非"为什么"
-- 导入顺序: 标准库 → 第三方 → 本地模块，未排序
-- 异常处理: 裸 except:、捕获过于宽泛
-- 类型注解: 函数缺少类型注解
-- 变量命名: 单字母变量（除循环变量 i/j/k）、含义不清
-- 死代码: 注释掉的代码块、永远不会执行的代码
-- 文件过长: 单个文件超过 500 行建议拆分模块
+客观违规 = 违反 PEP 8 明确规定 OR 缺少必要文档/类型注解。命名品味差异、Pythonic 偏好等主观判断不报告。
 
-对每个发现的问题输出：
-{
-  "issues": [
-    {
-      "severity": "high|medium|low",
-      "category": "命名|函数设计|注释|重复|异常|类型|格式|其他",
-      "lineno": 问题所在行号,
-      "code_snippet": "问题代码片段",
-      "description": "为什么这不符合规范",
-      "suggestion": "改进建议（给出改进后的示例）",
-      "pep8_ref": "PEP 8 相关条目（如 E501、N802）"
-    }
-  ]
-}
+按七个维度审查：命名、类型注解、格式、注释、函数设计、重复代码、异常处理。
 
-如果没有任何风格问题，返回 {"issues": []}
-```
+每条问题附带 `pep8_ref`（PEP 8 条目编号，如 E501）。
+
+无确认问题 → `issues` 返回空列表 `[]`。
 
 ---
 
@@ -254,51 +132,18 @@ def call_llm(system_prompt: str, user_message: str, output_structure=None) -> st
 
 **定位:** 不审查代码，只做"三合一"——去重、排序、生成修复方案。
 
-**System Prompt:**
+**三分类判定系统（详见 `src/graph/nodes/critic_coder.py`）:**
 
-```
-你是一个代码审查仲裁者。你会收到来自安全、性能、风格三个审查员的审查结果。
-你的任务：
+对每个问题，critic 先判断是否影响正确性/安全性：
+- **不影响**（纯风格/命名/docstring）→ 丢弃，不进入 action_plan
+- **影响 + 需外部资源** → `[需人工]`（硬编码凭据、新建文件、新依赖、跨文件改动）
+- **影响 + 单文件可修** → 普通修复指令，fix_instruction 含行号 + FROM → TO
 
-1. **去重**: 如果两个审查员发现了同一个问题（同一行、同一本质），保留更详细的版本
-2. **排序**: 按严重度排序 —— critical > high > medium > low
-3. **合并为修复方案**: 生成统一的修复行动计划
+**Guard 函数（确定性兜底，LLM 输出后执行）:**
+- `_guard_credential_manual_tag()`: 凭据类问题 + 修复方案含外部化关键词 → 强制标 `[需人工]`
+- `_strip_fake_tags()`: 剥离 LLM 自发造的 `[修复]` 标签，防止 coder 误入 skipped_items
 
-输出 JSON：
-{
-  "score_before": 0-100,             // 基于问题数量和严重度的综合评分
-  "total_issues": 去重后问题总数,
-  "by_severity": {
-    "critical": 0,
-    "high": 0,
-    "medium": 0,
-    "low": 0
-  },
-  "action_plan": [                    // 按优先级排列的修复计划
-    {
-      "priority": 1,                  // 从 1 开始编号
-      "severity": "critical",
-      "category": "安全|性能|风格",
-      "description": "需要修改什么",
-      "lineno": 行号,
-      "fix_instruction": "具体的修改指令（写给 coder_agent 看的）"
-    }
-  ],
-  "summary": "自然语言总结：主要风险是什么，最需要优先处理的是什么"
-}
-```
-
-**评分规则:**
-- 基础分 100
-- 每个 critical -20，high -10，medium -5，low -2
-- 最低 0 分
-
-**去重规则:**
-- 同一 `lineno` + 同一 `category` → 视为重复
-- 保留 description 更详细的那一条
-```
-
-**fix_instruction 的设计:** 这是写给 coder_agent 的执行指令，必须具体——"将第 12 行的 os.system(f'rm {path}') 替换为 subprocess.run(['rm', path], shell=False)"，不能是"修复命令注入"。
+**评分:** `score_before` 由 LLM 主观打分 0-100，`score_after` 在 output_node 按公式计算。
 
 ---
 
@@ -306,70 +151,34 @@ def call_llm(system_prompt: str, user_message: str, output_structure=None) -> st
 
 **定位:** 忠实执行修复方案，不自行发挥。只修改有问题的地方。
 
-**System Prompt:**
+**硬禁令（绝对禁止，fix_instruction 要求也不行，详见 `src/graph/nodes/critic_coder.py`）:**
 
-```
-你是一个 Python 代码修复专家。你会收到：
-1. 原始代码
-2. 修复方案（action_plan，按优先级排列）
-3. 可选的修复思路（reflection_notes，重试时提供）
-4. 可选的用户意见（human_feedback）
+1. 禁止改名 —— 函数名、类名、变量名、参数名一律不动
+2. 禁止改签名 —— 不增删参数、不改返回类型
+3. 禁止改作用域 —— 不得把局部变量提升为全局、或把全局降为局部
 
-规则：
-- 严格按照 action_plan 中的 fix_instruction 逐一修改
-- 只修改有问题的地方，不要重构其他部分
-- 保持原代码的缩进风格和整体结构
-- 如果有 reflection_notes，参考其思路调整修复策略
-- 如果有 human_feedback，按用户意见优先调整
-- 不要在修复代码周围添加额外注释标记（如 # FIXED）
-- 修改完成后的代码必须是可直接运行的合法 Python 代码
+违反硬禁令的指令静默丢弃，不执行。
 
-输出 JSON：
-{
-  "fixed_code": "修复后的完整代码",
-  "changes": [                         // 每一处修改的说明
-    {
-      "lineno": 修改行号,
-      "original": "修改前代码片段",
-      "fixed": "修改后代码片段",
-      "reason": "为什么这样改（一句话）"
-    }
-  ],
-  "fixed_count": 实际修改数量,
-  "notes": "任何需要注意的事项（如有无法自动修复的问题，在这里说明）"
-}
-```
+**优先级:** `human_feedback` > `reflection_notes` > `fix_instruction`
+
+**Guard 函数（代码级兜底）:**
+- `_detect_scope_violations()`: AST 对比检测 coder 是否将函数内语句提升到模块级，违规写入 `CoderResult.notes` 警告
+- `[需人工]` 条目 + 同行条目在 coder 消费前被过滤到 `skipped_items`，不传给 LLM
+- `critic_summary is None` → 返回 `CoderResult(fixed_code=original_code)` 兜底，避免级联空返回
 
 ### 4.7 reflect_node — 反思分析者
 
 **定位:** 修复代码跑崩了，分析为什么崩，给下次修复提供思路。
 
-**System Prompt:**
+**temperature:** 0.3（独立 `ChatDeepSeek` 实例，唯一高于 0.1 的节点）
 
-```
-你是一个调试专家。修复后的代码在沙箱中执行失败了。
-请分析失败原因，并提供新的修复思路。
+**输出格式约束（详见 `src/graph/nodes/terminal.py`）:**
+- `failure_type`: 语法错误 / 逻辑错误 / 引入新 bug / 环境问题
+- `root_cause`: 点出具体哪处修改导致失败
+- `should_revert`: 是否应回退（语法错误/新 bug → true）
+- `new_strategy`: 必须含目标行号 + FROM → TO，禁止模糊表述（"重新检查""调整方案"等）
 
-你有以下信息：
-- 原始代码
-- 上一轮的修复修改列表（changes）
-- 沙箱执行错误信息（stderr/stdout/exit_code）
-
-请判断：
-1. 失败类型：语法错误 / 逻辑错误 / 引入新 bug / 沙箱环境问题
-2. 根因：哪一处修改导致了失败
-3. 新方案：如何调整修复策略
-
-输出 JSON：
-{
-  "failure_type": "syntax_error|logic_error|new_bug|env_issue",
-  "root_cause": "哪处修改导致了失败",
-  "new_strategy": "调整后的修复思路（具体到怎么改）",
-  "should_revert": true/false    // 是否应该回退某处修改
-}
-```
-
-**temperature:** 0.3（反思需要一点发散思维，但不宜过高）
+输出拆解存入 state：`reflection_notes` 只存 `new_strategy`，`retry_count += 1`
 
 ---
 
@@ -377,25 +186,12 @@ def call_llm(system_prompt: str, user_message: str, output_structure=None) -> st
 
 ### 5.1 sandbox_executor（Tool 节点）
 
-不是 Agent，是系统调用。
+不是 Agent，是系统调用。双通道执行（详见 `src/graph/nodes/sandbox.py`）:
 
-```python
-def sandbox_executor_node(state: AgentState) -> dict:
-    """在 Docker 沙箱中执行修复后代码"""
-    fixed_code = state["coder_result"].fixed_code
+- **主通道（Docker）:** 检测到 `docker` 命令 → `docker run --network=none --memory=128m --cpus=0.5`，`-W error` 运行
+- **降级通道（subprocess）:** Docker 不可用时 → `subprocess.run(['python3', '-W', 'error', script_path])`
 
-    # 1. 将代码写入临时文件
-    # 2. 调用 Docker 容器执行: docker run --rm --network=none -m 128m ...
-    # 3. 捕获 stdout/stderr/exit_code
-    # 4. 返回 SandboxResult
-
-    return {"sandbox_result": SandboxResult(
-        exit_code=exit_code,
-        stdout=stdout,
-        stderr=stderr,
-        passed=(exit_code == 0),
-    )}
-```
+`coder_result is None` 时返回 `SandboxResult(exit_code=-1, stderr='修复代码为空', passed=False)` 兜底。
 
 ### 5.2 human_review（HITL 节点）
 
@@ -411,24 +207,19 @@ def human_review_node(state: AgentState) -> dict:
 
 ### 5.3 output_node（Function 节点）
 
-不是 Agent，是数据组装。
+不是 Agent，是数据组装。详见 `src/graph/nodes/terminal.py`。
 
-```python
-def output_node(state: AgentState) -> dict:
-    """组装最终报告"""
-    report = FinalReport(
-        original_code=state["original_code"],
-        fixed_code=state["coder_result"].fixed_code,
-        issues=state["critic_summary"].action_plan,
-        score_before=state["critic_summary"].score_before,
-        # score_after 可以留到阶段四再计算
-        sandbox_passed=state["sandbox_result"].passed,
-        retry_count=state["retry_count"],
-        summary=state["critic_summary"].summary,
-    )
-    status = "success" if state["sandbox_result"].passed else "failed"
-    return {"final_report": report, "status": status}
-```
+**score_after 计算公式:**
+- 沙箱通过 + 有修改: `min(score_before + min(changes*2, (100-score_before)//2), 100)`
+- 沙箱通过 + 无修改: `score_before`
+- 沙箱失败: `max(score_before - 10, 0)`
+
+**status 三态:**
+- `success` — 沙箱通过 + 无 `[需人工]` 遗留
+- `partial` — 沙箱通过 + 有 `[需人工]` 跳过项
+- `failed` — 沙箱验证失败
+
+**透传字段:** `skipped_items`（[需人工] 建议）、`notes`（审查警告，如作用域变更）
 
 ---
 
@@ -436,13 +227,13 @@ def output_node(state: AgentState) -> dict:
 
 | Agent | temperature | structured_output | 特殊性 |
 |-------|-------------|-------------------|--------|
-| code_parser | 0 | 是 | 只做客观描述，不给意见 |
-| security_reviewer | 0.1 | 是 | 要求 CWE 编号 |
-| performance_reviewer | 0.1 | 是 | 要求估算影响 |
-| style_reviewer | 0.1 | 是 | 要求 PEP 8 引用 |
-| critic_agent | 0.1 | 是 | 去重 + 排序 + 评分 |
-| coder_agent | 0.1 | 是 | 严格按 fix_instruction 改 |
-| reflect_node | 0.3 | 是 | 唯一高于 0.1 的，需要一点发散 |
+| code_parser | 0.1 | 是 | 共享 _llm 实例，只做客观描述 |
+| security_reviewer | 0.1 | 是 | principle-driven，双条件确认 |
+| performance_reviewer | 0.1 | 是 | principle-driven，五维度审查 |
+| style_reviewer | 0.1 | 是 | principle-driven，客观违规 only |
+| critic_agent | 0.1 | 是 | 三分类判定 + guard 函数兜底 |
+| coder_agent | 0.1 | 是 | 硬禁令 + guard 函数 + None 守卫 |
+| reflect_node | 0.3 | 是 | 独立实例，唯一高于 0.1，需要发散 |
 
 ---
 

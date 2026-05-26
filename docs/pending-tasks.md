@@ -50,11 +50,21 @@
 - 在作用域违规检测到时间，验证 `coder.notes` 非空
 - 防止 `_detect_scope_violations()` 静默失效
 
-## 4. Docker 镜像分发
+## 4. Docker 全项目容器化 ✅ 已完成（2026-05-25）
 
-- 路线图阶段六提到 "Docker 沙箱 + 主应用容器化 → 镜像分发"
-- 当前 sandbox Dockerfile 已在 `sandbox/` 下，镜像只在本地构建
-- 分发方案待定（Docker Hub / 私有 Registry / 打包到代码仓库）
+- `Dockerfile`：主应用镜像，Docker CLI 静态二进制 + Streamlit/Batch 双模式
+- `docker-compose.yml`：开发部署（sandbox + app 一键启动）
+- `docker-compose.deploy.yml`：生产部署（预构建镜像 + restart 策略）
+- `sandbox/Dockerfile`：沙箱隔离镜像（非 root、最小化）
+- `docker-entrypoint.sh`：`STREAMLIT_MODE` 环境变量切换 Streamlit / Batch
+- `.streamlit/config.toml`：Docker headless 模式配置
+- 阿里云 apt + pip 镜像加速，构建速度可接受
+
+### 分发方案
+
+- 阿里云容器镜像仓库 ACR（`crpi-g05pgblu4dg99gld.cn-shanghai.personal.cr.aliyuncs.com/lixinchao/`）已可用
+- 推送命令：`docker tag code-review-agent:latest <acr>/code-review-agent:latest && docker push`
+- CI/CD 可集成 GitHub Actions + ACR 自动构建推送
 
 ## 5. test_st_05 同行动态锁定误判
 
@@ -83,28 +93,17 @@
   - score_after：结合沙箱结果 + 实际修复覆盖率 + 剩余 [需人工] 项加权
 - 优先级：低（当前评分趋势正确、前后对比有区分度，优化后可更客观但不影响核心功能）
 
-## 9. coder LLM 自发写入 notes 污染前端警告
+## 9. coder LLM 自发写入 notes 污染前端警告 ✅ 已修复（2026-05-25）
 
-- 现象：前端弹出「**【警告】** 所有修改均按 fix_instruction 执行，未做任何额外改动」
-- 根因：`CoderResult.notes` 被两个来源共用 —— 代码级 `_detect_scope_violations()` 写真正的警告，LLM 也自发往里写合规声明
-- 绕过链路：coder_agent → output_node → FinalReport.notes → render_notes()，无过滤
-- 修复方向：`output_node` 组装时过滤 LLM 自述类文本，或拆分为 `notes`（代码警告）和 `llm_notes`（LLM 备注）两个字段
+- 修复：`_detect_scope_violations` 无条件覆盖 `result.notes = ""`（无违规时），过滤 LLM 自述类文本
+- 已 commit: 777c3cb
 
-## 10. critic LLM 返回 None → 级联导致沙箱"修复代码为空"
+## 10. critic LLM 返回 None → 级联导致沙箱"修复代码为空" ✅ 已修复（2026-05-25）
 
-- 现象：前端跑示例代码一（SQL 注入 + 硬编码密码）时，沙箱验证失败 `exit_code=-1, stderr=修复代码为空`，偶发两次
-- 根因：`critic_agent` → LLM 结构化输出解析失败返回 `None` → `return {}` → `critic_summary` 保留 `None` → `coder_agent` 检测 `critic_summary is None` → `return {}` → `coder_result` 保留 `None` → `sandbox_executor` 检测 `coder_result is None` → 返回错误
-- 关键链路：三次 `return {}` 级联，中间缺少兜底 `CoderResult(fixed_code=original_code)` 断点
-- 修复方向：`coder_agent` 中 `critic_summary is None` 时，不返回 `{}`，改为返回 `CoderResult(fixed_code=state['original_code'])`，让沙箱至少能执行原始代码
+- 修复：`coder_agent` 中 `critic is None` 时返回 `CoderResult(fixed_code=original_code)`，中断三次 `return {}` 级联
+- 已 commit: 777c3cb
 
-## 11. 同行动态锁定误伤 —— critic 误标 [需人工] + 锁定连坐
+## 11. 同行动态锁定误伤 —— critic 误标 [需人工] + 锁定连坐 ✅ 已修复（2026-05-25）
 
-- 现象：示例代码一第 8 行，critic 同时产出两条指令：
-  1. `[需人工]` — 「数据库连接复用需跨函数共享连接对象」
-  2. 正常修复 — `conn = sqlite3.connect(...)` → `with sqlite3.connect(...) as conn:`
-  第一条锁住第 8 行 → 第二条被同行动态锁定，显示 `(同行动态锁定) 行8-9：...→ with sqlite3.connect...`
-- 根因 1：critic 把「用连接池」标为 `[需人工]`，但单文件内用 `with` 即可解决连接管理，不涉及其余 `[需人工]` 判据（新建文件/新依赖/跨文件改动）
-- 根因 2：同行动态锁定的设计假设是「同行 [需人工] 意味着该行不能动」，但实际场景中同行可能存在独立的、安全的局部修复
-- 修复方向：
-  - 优先修 critic prompt：`[需人工]` 判据收紧，连接池/重构建议不属于跨文件需求，应降为普通修复
-  - 备选：同行动态锁定改为「仅锁定 [需人工] 条目自身」，不再连坐同行非 [需人工] 条目
+- 修复：`coder_agent` 中去掉同行连坐逻辑，`[需人工]` 条目只锁定自身，不再连坐同行非 `[需人工]` 条目
+- 已 commit: 777c3cb

@@ -1,11 +1,31 @@
 services:
+  # === 沙箱镜像（Docker-in-Docker 方案）===
+  # 主应用通过 docker.sock 调用宿主机 Docker daemon 启动此镜像的容器
+  sandbox:
+    build:
+      context: ./sandbox
+      dockerfile: Dockerfile
+    image: code-review-sandbox:latest
+    # 沙箱镜像只用于构建，不长期运行
+    command: ["echo", "sandbox image ready"]
+
+  # === 主应用 ===
   app:
     build: .
     image: code-review-agent:latest
+    depends_on:
+      sandbox:
+        condition: service_completed_successfully
     env_file:
       - .env
     environment:
-      - SANDBOX_TMP_HOST=${PWD}/sandbox-tmp
+      - SANDBOX_TMP_HOST=/tmp
+      - STREAMLIT_MODE=${STREAMLIT_MODE:-true}
+      - PORT=${PORT:-8501}
+    ports:
+      - "${PORT:-8501}:8501"
     volumes:
+      # Docker-in-Docker：主应用通过此 sock 在宿主机上启动 sandbox 容器
       - /var/run/docker.sock:/var/run/docker.sock
+      # 沙箱临时文件共享目录
       - ./sandbox-tmp:/var/sandbox

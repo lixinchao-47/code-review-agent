@@ -18,6 +18,8 @@ dependencies = [
     "langchain>=1.2,<2.0",
     "langchain-deepseek>=1.0,<2.0",
     "pydantic>=2.0",
+    "streamlit>=1.50",
+    "python-dotenv>=1.0",
 ]
 
 [project.scripts]

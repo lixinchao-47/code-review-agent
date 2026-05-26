@@ -79,12 +79,12 @@
 ┌──────────────────┐  ┌──────────────────┐  ┌───────┘    └───────┐
 │ output_node      │  │ coder_agent      │  ▼ 是                ▼ 否
 │ ──────────────── │  │ (重新修复)       │  ┌────────────────────────┐
-│ in: 所有字段 (s) │  └──────────────────┘  │ output_node            │
+│ in: 所有字段 (s) │  └──────────────────┘  │ human_review           │
 │ out: final_report│                        │ ────────────────────── │
-│      (s)         │                        │ in:  所有字段 (s)      │
-│      →FinalReport│                        │ out: final_report (s)  │
-│      status (s)  │                        │      → FinalReport     │
-└──────────────────┘                        │      status = "failed" │
+│      (s)         │                        │ in: 所有字段 (s)       │
+│      →FinalReport│                        │ out: human_feedback(s) │
+│      status (s)  │                        │      → 用户最终确认     │
+└──────────────────┘                        │      (或直接输出报告)   │
                                             └────────────────────────┘
 ```
 
@@ -117,8 +117,10 @@ performance_reviewer├→ critic_agent
 style_reviewer ────┘
 
 coder_agent → sandbox_executor
-human_review(通过) → output_node
+human_review(确认) → output_node
+human_review(修改意见) → coder_agent
 reflect_node(retry<3) → coder_agent
+reflect_node(retry>=3) → human_review
 ```
 
 ### 3.2 条件边
@@ -140,9 +142,18 @@ from langgraph.types import Send
 def continue_to_reviewers(state: AgentState):
     """将 code_analysis 同时发给三个审查 Agent"""
     return [
-        Send("security_reviewer", {"code_analysis": state["code_analysis"]}),
-        Send("performance_reviewer", {"code_analysis": state["code_analysis"]}),
-        Send("style_reviewer", {"code_analysis": state["code_analysis"]}),
+        Send("security_reviewer", {
+            "code_analysis": state["code_analysis"],
+            "original_code": state["original_code"],
+        }),
+        Send("performance_reviewer", {
+            "code_analysis": state["code_analysis"],
+            "original_code": state["original_code"],
+        }),
+        Send("style_reviewer", {
+            "code_analysis": state["code_analysis"],
+            "original_code": state["original_code"],
+        }),
     ]
 ```
 
@@ -172,7 +183,7 @@ def retry_or_fail(state: AgentState) -> str:
     """反思后的路由判断"""
     if state["retry_count"] < MAX_RETRY:
         return "coder_agent"
-    return "output_node"
+    return "human_review"
 ```
 
 ## 6. Graph 构建伪代码

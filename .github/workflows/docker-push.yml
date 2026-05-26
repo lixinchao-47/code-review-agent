@@ -1,0 +1,29 @@
+name: Build and Push Docker Images
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:          # 允许手动触发
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to Alibaba Cloud ACR
+        run: |
+          echo "${{ secrets.ACR_PASSWORD }}" | \
+          docker login crpi-g05pgblu4dg99gld.cn-shanghai.personal.cr.aliyuncs.com \
+            --username=nick2803276058 --password-stdin
+
+      - name: Build & Push Main App
+        run: |
+          docker build -t crpi-g05pgblu4dg99gld.cn-shanghai.personal.cr.aliyuncs.com/lixinchao/code-review-agent:latest .
+          docker push crpi-g05pgblu4dg99gld.cn-shanghai.personal.cr.aliyuncs.com/lixinchao/code-review-agent:latest
+
+      - name: Build & Push Sandbox
+        run: |
+          docker build -t crpi-g05pgblu4dg99gld.cn-shanghai.personal.cr.aliyuncs.com/lixinchao/code-review-sandbox:latest sandbox/
+          docker push crpi-g05pgblu4dg99gld.cn-shanghai.personal.cr.aliyuncs.com/lixinchao/code-review-sandbox:latest

@@ -22,3 +22,6 @@ src/code_review_agent.egg-info/
 # 系统文件
 .DS_Store
 Thumbs.db
+# Docker 运行时目录
+sandbox-tmp/
+dist/

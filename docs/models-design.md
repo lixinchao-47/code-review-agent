@@ -16,7 +16,7 @@ AgentState (TypedDict)          ← LangGraph 流程唯一数据载体
 ├── final_report: FinalReport
 └── status: str
 
-Pydantic BaseModel (7个)
+Pydantic BaseModel (12个)
 ├── CodeAnalysis        ← code_parser 输出
 ├── ReviewResult        ← 任一审查 Agent 输出（含 list[Issue]）
 │   └── Issue           ← 单个问题（安全/性能/风格共用）
@@ -214,7 +214,6 @@ class ActionItem(BaseModel):
     priority: int                          # 从 1 开始编号
     severity: Severity
     category: IssueCategory
-    dimension: ReviewDimension             # 来源维度，coder 可据此调整修复风格
     description: str                       # 需要修改什么
     lineno: int
     fix_instruction: str                   # 具体修改指令，必须可执行
@@ -253,7 +252,8 @@ class CoderResult(BaseModel):
     fixed_code: str                        # 修复后的完整代码
     changes: list[ChangeItem] = Field(default_factory=list)
     fixed_count: int = 0
-    notes: str = ""                        # 无法自动修复的问题说明
+    notes: str = ""                        # 审查警告（如作用域变更检测）
+    skipped_items: list[str] = Field(default_factory=list)  # [需人工] 跳过的条目
 ```
 
 ---
@@ -310,16 +310,18 @@ class FinalReport(BaseModel):
     """最终审查报告——展示给用户的完整输出"""
     original_code: str
     fixed_code: str
-    issues: list[ActionItem] = Field(default_factory=list)   # 复用 ActionItem
+    action_items: list[ActionItem] = Field(default_factory=list)  # 复用 ActionItem
     score_before: int = 0
-    score_after: int = 0                    # 阶段四再实现修复后评分
+    score_after: int = 0                    # 修复后评分，output_node 计算
     sandbox_passed: bool = False
     retry_count: int = 0
     summary: str = ""
-    status: str = "running"
+    status: str = "running"                 # running / success / partial / failed
+    skipped_items: list[str] = Field(default_factory=list)  # [需人工] 条目，透传自 CoderResult
+    notes: str = ""                         # 审查警告（如作用域变更检测）
 ```
 
-**为什么 `issues` 用 `ActionItem` 而不是 `Issue`:**
+**为什么 `action_items` 用 `ActionItem` 而不是 `Issue`:**
 - 最终报告展示的是经过 critic 去重排序后的版本
 - `ActionItem` 已经包含 `fix_instruction`，用户可以看到每条问题怎么修的
 - 避免数据冗余，不重复存两套
@@ -377,14 +379,14 @@ INITIAL_STATE: AgentState = {
 # 3. 项目内部 (无——models 是最底层，不依赖其他项目模块)
 ```
 
-单一 `models.py` 文件，不拆分为 `models/` 包。7 个模型 + 4 个枚举大约 200 行，一个文件足够，拆开反而增加导入复杂度。
+单一 `models.py` 文件，不拆分为 `models/` 包。12 个模型 + 4 个枚举大约 350 行，一个文件足够，拆开反而增加导入复杂度。
 
 ---
 
 ## 8. 模型结构总览
 
 ```
-models.py (9 个 Pydantic 模型 + 4 个枚举)
+models.py (12 个 Pydantic 模型 + 4 个枚举)
 ├── Enum
 │   ├── Severity           ← 严重程度
 │   ├── ReviewDimension    ← 审查维度
