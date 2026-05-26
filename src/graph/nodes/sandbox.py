@@ -10,23 +10,20 @@ from graph.state import AgentState
 from models import SandboxResult
 
 
-def _docker_sandbox(script_path: str) -> SandboxResult:
-    """Docker 容器沙箱：network=none, memory=128m, non-root"""
-    host_dir = os.environ.get('SANDBOX_TMP_HOST', '/tmp')
-    filename = os.path.basename(script_path)
-    host_path = os.path.join(host_dir, filename)
+def _docker_sandbox(fixed_code: str) -> SandboxResult:
+    """Docker 容器沙箱：stdin 传代码，无需文件挂载，跨平台通用"""
     try:
         result = subprocess.run(
             [
-                'docker', 'run', '--rm',
+                'docker', 'run', '--rm', '-i',
                 '--network=none',
                 '--memory=128m',
                 '--memory-swap=128m',
                 '--cpus=0.5',
-                '-v', f'{host_path}:/sandbox/code.py:ro',
                 SANDBOX_IMAGE,
-                'python3', '-W', 'error', '/sandbox/code.py',
+                'python3', '-W', 'error', '-',
             ],
+            input=fixed_code,
             capture_output=True, text=True,
             timeout=SANDBOX_TIMEOUT,
         )
@@ -65,17 +62,15 @@ def sandbox_executor(state: AgentState) -> dict:
         return {'sandbox_result': SandboxResult(exit_code=-1, stderr='修复代码为空', passed=False)}
     fixed_code = coder.fixed_code
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False,
-                                       dir='/var/sandbox' if os.path.isdir('/var/sandbox') else None) as f:
-        f.write(fixed_code)
-        tmp_path = f.name
-
-    try:
-        if shutil.which('docker'):
-            sandbox = _docker_sandbox(tmp_path)
-        else:
+    if shutil.which('docker'):
+        sandbox = _docker_sandbox(fixed_code)
+    else:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+            f.write(fixed_code)
+            tmp_path = f.name
+        try:
             sandbox = _subprocess_sandbox(tmp_path)
-    finally:
-        os.unlink(tmp_path)
+        finally:
+            os.unlink(tmp_path)
 
     return {'sandbox_result': sandbox}
