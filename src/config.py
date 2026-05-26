@@ -21,5 +21,8 @@ MAX_RETRY = int(os.getenv("MAX_RETRY", "3"))
 # 沙箱执行超时（秒）
 SANDBOX_TIMEOUT = int(os.getenv("SANDBOX_TIMEOUT", "10"))
 
+# 沙箱镜像名（docker-compose 拉取后可配置短名或完整 ACR 名）
+SANDBOX_IMAGE = os.getenv("SANDBOX_IMAGE", "code-review-sandbox")
+
 # 日志级别
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

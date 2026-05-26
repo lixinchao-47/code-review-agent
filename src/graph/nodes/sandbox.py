@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import tempfile
 
-from config import SANDBOX_TIMEOUT
+from config import SANDBOX_TIMEOUT, SANDBOX_IMAGE
 from graph.state import AgentState
 from models import SandboxResult
 
@@ -24,7 +24,7 @@ def _docker_sandbox(script_path: str) -> SandboxResult:
                 '--memory-swap=128m',
                 '--cpus=0.5',
                 '-v', f'{host_path}:/sandbox/code.py:ro',
-                'code-review-sandbox',
+                SANDBOX_IMAGE,
                 'python3', '-W', 'error', '/sandbox/code.py',
             ],
             capture_output=True, text=True,

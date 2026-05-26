@@ -17,7 +17,11 @@ services:
     env_file:
       - .env
     environment:
-      - SANDBOX_TMP_HOST=/tmp
+      - SANDBOX_IMAGE=${SANDBOX_IMAGE:-crpi-g05pgblu4dg99gld.cn-shanghai.personal.cr.aliyuncs.com/lixinchao/code-review-sandbox:latest}
+      # 宿主机的 sandbox-tmp 绝对路径，用于沙箱容器挂载代码文件
+      # Linux/WSL:  ./sandbox-tmp 的绝对路径，如 /home/user/code-review-agent/sandbox-tmp
+      # Windows:    D:\code-review-agent\sandbox-tmp（Hyper-V）或 /mnt/d/code-review-agent/sandbox-tmp（WSL2）
+      - SANDBOX_TMP_HOST=${SANDBOX_TMP_HOST:-/tmp}
       - STREAMLIT_MODE=true
       - PORT=8501
     ports:

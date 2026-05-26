@@ -50,6 +50,10 @@ LLM_MODEL=deepseek-chat
 MAX_RETRY=3
 SANDBOX_TIMEOUT=10
 LOG_LEVEL=INFO
+# 以下按你的系统选填一行，不填默认 /tmp（仅 Linux 有效）：
+# Windows (Hyper-V):  SANDBOX_TMP_HOST=D:\code-review-agent\sandbox-tmp
+# Windows (WSL2):     SANDBOX_TMP_HOST=/mnt/d/code-review-agent/sandbox-tmp
+# macOS:              SANDBOX_TMP_HOST=/Users/你的用户名/code-review-agent/sandbox-tmp
 ```
 
 > DeepSeek Key 获取：https://platform.deepseek.com → API Keys
