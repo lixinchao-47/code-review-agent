@@ -13,8 +13,14 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Login to Alibaba Cloud ACR
+        env:
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
         run: |
-          echo "${{ secrets.ACR_PASSWORD }}" | \
+          if [ -z "$ACR_PASSWORD" ]; then
+            echo "ACR_PASSWORD not set, skipping push"
+            exit 1
+          fi
+          echo "$ACR_PASSWORD" | \
           docker login crpi-g05pgblu4dg99gld.cn-shanghai.personal.cr.aliyuncs.com \
             --username=nick2803276058 --password-stdin
 
