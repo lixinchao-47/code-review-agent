@@ -25,3 +25,7 @@ Thumbs.db
 # Docker 运行时目录
 sandbox-tmp/
 dist/
+
+# 个人笔记
+语法笔记.md
+interview-qa.md
