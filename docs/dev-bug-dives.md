@@ -11,7 +11,7 @@
 - [问题 #4：LLM 返回枚举非法值导致 `ValidationError` —— 系统性加固所有枚举字段](#问题-4llm-返回枚举非法值导致-validationerror--系统性加固所有枚举字段)
 - [问题 #5：`with_structured_output` 返回 `None` 导致 `AttributeError` —— 全链路 None 保护](#问题-5with_structured_output-返回-none-导致-attributeerror--全链路-none-保护)
 - [问题 #6：DooD 模式下容器与宿主机文件系统不互通 —— sandbox 容器挂载不到代码文件](#问题-6dood-模式下容器与宿主机文件系统不互通--sandbox-容器挂载不到代码文件)
-- [问题 #7：`retry_or_fail` 返回值与条件边映射不一致 —— `KeyError: 'human_review'`](#问题-7retry_or_fail-返回值与条件边映射不一致--keyerror-human_review)
+- [问题 #7：`retry_or_human` 返回值与条件边映射不一致 —— `KeyError: 'human_review'`](#问题-7retry_or_human-返回值与条件边映射不一致--keyerror-human_review)
 - [问题 #8：checkpointer 序列化后 Pydantic `isinstance` 失效 —— FinalReport ValidationError](#问题-8checkpointer-序列化后-pydantic-isinstance-失效--finalreport-validationerror)
 - [问题 #9：[需人工] 标签不稳定 —— 硬编码凭据 60% 漏标，三次 prompt 改进无效，最终确定性兜底](#问题-9需人工-标签不稳定--硬编码凭据-60-漏标三次-prompt-改进无效最终确定性兜底)
 - [问题 #10：coder 不遵循 [需人工] 标签 —— 代码级过滤从源头阻断假修复](#问题-10coder-不遵循-需人工-标签--代码级过滤从源头阻断假修复)
@@ -638,7 +638,7 @@ def _docker_sandbox(script_path: str) -> SandboxResult:
 
 ---
 
-## 问题 #7：`retry_or_fail` 返回值与条件边映射不一致 —— `KeyError: 'human_review'`
+## 问题 #7：`retry_or_human` 返回值与条件边映射不一致 —— `KeyError: 'human_review'`
 
 **日期**：2026-05-22
 
@@ -646,7 +646,7 @@ def _docker_sandbox(script_path: str) -> SandboxResult:
 ```
 KeyError: 'human_review'
 ```
-在 `retry_count >= MAX_RETRY` 时，`retry_or_fail` 返回 `"human_review"`，但条件边映射表中没有这个 key，LangGraph 路由失败。
+在 `retry_count >= MAX_RETRY` 时，`retry_or_human` 返回 `"human_review"`，但条件边映射表中没有这个 key，LangGraph 路由失败。
 
 **触发条件**：重试次数达到上限（MAX_RETRY=3）后，沙箱仍然失败。
 
@@ -654,7 +654,7 @@ KeyError: 'human_review'
 
 路由函数（第 35-39 行）：
 ```python
-def retry_or_fail(state: AgentState) -> str:
+def retry_or_human(state: AgentState) -> str:
     if state["retry_count"] >= MAX_RETRY:
         return "human_review"      # ← 返回这个值
     return "coder_agent"
@@ -664,7 +664,7 @@ def retry_or_fail(state: AgentState) -> str:
 ```python
 workflow.add_conditional_edges(
     "reflect_node",
-    retry_or_fail,
+    retry_or_human,
     {
         "output_node": "output_node",   # ← 映射表里没有 "human_review"
         "coder_agent": "coder_agent",
@@ -674,7 +674,7 @@ workflow.add_conditional_edges(
 
 **根因**：
 
-这是一个**连带修改遗漏**。在优化重试节点时，`retry_or_fail` 的返回值从 `"output_node"` 改成了 `"human_review"`（让重试耗尽后走人工介入而非直接输出失败报告），但条件边的映射表没有同步更新。返回值改了，映射表没改，LangGraph 收到一个映射表里不存在的目标，直接 KeyError。
+这是一个**连带修改遗漏**。在优化重试节点时，`retry_or_human` 的返回值从 `"output_node"` 改成了 `"human_review"`（让重试耗尽后走人工介入而非直接输出失败报告），但条件边的映射表没有同步更新。返回值改了，映射表没改，LangGraph 收到一个映射表里不存在的目标，直接 KeyError。
 
 **排查过程**：
 
@@ -687,13 +687,13 @@ workflow.add_conditional_edges(
 
 ```python
 # 修复前
-workflow.add_conditional_edges("reflect_node", retry_or_fail, {
+workflow.add_conditional_edges("reflect_node", retry_or_human, {
     "output_node": "output_node",
     "coder_agent": "coder_agent",
 })
 
 # 修复后
-workflow.add_conditional_edges("reflect_node", retry_or_fail, {
+workflow.add_conditional_edges("reflect_node", retry_or_human, {
     "human_review": "human_review",
     "coder_agent": "coder_agent",
 })
@@ -705,11 +705,11 @@ workflow.add_conditional_edges("reflect_node", retry_or_fail, {
 
 **为什么 CLI 模式没暴露**：
 
-CLI 模式（`run.py`）中 HITL 是演示模式自动批准的，流程走 `sandbox_executor` 的条件边 `should_retry_or_human`，当沙箱失败时直接进入 `reflect_node`。但如果重试达到上限后沙箱仍然失败，`retry_or_fail` 同样会返回 `"human_review"` 触发 KeyError。只是测试用的示例代码比较简单，极少触发 3 次全部失败的情况。
+CLI 模式（`run.py`）中 HITL 是演示模式自动批准的，流程走 `sandbox_executor` 的条件边 `should_retry_or_human`，当沙箱失败时直接进入 `reflect_node`。但如果重试达到上限后沙箱仍然失败，`retry_or_human` 同样会返回 `"human_review"` 触发 KeyError。只是测试用的示例代码比较简单，极少触发 3 次全部失败的情况。
 
 **经验教训**：
 
-1. **修改函数返回值时，必须同步检查所有消费者。** `retry_or_fail` 的返回值由条件边映射表消费，二者是耦合的。改了返回值必须检查映射表、文档、测试。
+1. **修改函数返回值时，必须同步检查所有消费者。** `retry_or_human` 的返回值由条件边映射表消费，二者是耦合的。改了返回值必须检查映射表、文档、测试。
 2. **单元测试覆盖了函数行为但没覆盖集成的映射关系。** B04 #01 测试了函数返回值，但没有验证编译后的图中条件边是否包含该返回值的路由目标。测试的检测 4 只做了节点存在检查而非边映射检查。
 3. **条件边映射表的 key 必须与路由函数的所有可能返回值一一对应。** 少一个就是 KeyError，多一个不影响（不会被路由到但也不报错）。原则是映射表的 key 集合 ⊇ 路由函数返回值集合。
 

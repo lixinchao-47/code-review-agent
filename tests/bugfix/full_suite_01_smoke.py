@@ -19,7 +19,7 @@ if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
 from config import MAX_RETRY
-from graph.builder import build_graph, retry_or_fail, should_continue_or_output
+from graph.builder import build_graph, retry_or_human, should_continue_or_output
 from graph.state import INITIAL_STATE
 
 
@@ -38,14 +38,14 @@ if __name__ == "__main__":
     passed = 0
 
     # --- B04 routing ---
-    print("--- [B04] retry_or_fail 路由 ---")
+    print("--- [B04] retry_or_human 路由 ---")
     for rc in range(MAX_RETRY):
-        result = retry_or_fail(build_state(retry_count=rc))
+        result = retry_or_human(build_state(retry_count=rc))
         ok = result == "coder_agent"
         total += 1; passed += 1 if ok else 0
         print(f"  {'✅' if ok else '❌'} retry_count={rc} → {result}")
     for rc in [MAX_RETRY, MAX_RETRY + 1]:
-        result = retry_or_fail(build_state(retry_count=rc))
+        result = retry_or_human(build_state(retry_count=rc))
         ok = result == "human_review"
         total += 1; passed += 1 if ok else 0
         print(f"  {'✅' if ok else '❌'} retry_count={rc} → {result}")

@@ -14,6 +14,7 @@
 - [问题 #7：LLM 返回 `"issues": null` 导致 `AttributeError`](#问题-7llm-返回-issues-null-导致-attributeerror)
 - [问题 #8：LLM 返回枚举非法值导致 `ValidationError` —— 系统性加固所有枚举字段](#问题-8llm-返回枚举非法值导致-validationerror--系统性加固所有枚举字段)
 - [问题 #9：`with_structured_output` 返回 `None` 导致 `AttributeError` —— 全链路 None 保护](#问题-9with_structured_output-返回-none-导致-attributeerror--全链路-none-保护)
+- [问题 #12：Windows 部署沙箱执行失败](#问题-12windows-部署沙箱执行失败)
 
 ---
 
@@ -405,3 +406,60 @@ During task with name 'style_reviewer' and id 'd0b1d507-533a-96a7-5478-d9c6fd93e
 消费端：`coder_agent` 检查 `critic_summary is None`、`sandbox_executor` 和 `reflect_node` 检查 `coder_result is None`。
 
 **性质**：间歇性 bug，LLM 输出质量波动触发。同样代码跑两次，一次炸一次不炸。
+
+---
+
+## 问题 #12：Windows 部署沙箱执行失败
+
+**日期**：2026-05-26
+
+**场景**：在 Windows 新电脑上通过 `docker-compose.deploy.yml` 从 ACR 拉取镜像部署，Streamlit 正常运行，但沙箱验证一直失败。
+
+---
+
+### 阶段一：沙箱超时
+
+**现象**：沙箱每次执行都超时（10 秒后返回失败），三次重试全部超时。
+
+**排查**：`_docker_sandbox` 中 `docker run` 用的镜像名是硬编码的 `'code-review-sandbox'`（短名），但 ACR 拉下来的镜像以完整 registry 路径存储：`crpi-xxx.cn-shanghai.personal.cr.aliyuncs.com/lixinchao/code-review-sandbox:latest`。Docker 不会自动将短名匹配到完整名，`docker run code-review-sandbox` 找不到镜像，每次 pull 超时。
+
+**修复**：
+- `src/config.py`：新增 `SANDBOX_IMAGE` 环境变量，默认值 `code-review-sandbox`
+- `src/graph/nodes/sandbox.py`：`_docker_sandbox` 中硬编码的 `'code-review-sandbox'` 改为读 `SANDBOX_IMAGE`
+- `docker-compose.deploy.yml`：注入 `SANDBOX_IMAGE` 为完整 ACR 路径
+
+---
+
+### 阶段二：沙箱快速失败（`can't find '__main__' module`）
+
+**现象**：超时修复后，沙箱不再超时，但执行秒失败，stderr 报：
+
+```
+/usr/local/bin/python3: can't find '__main__' module in '/sandbox/code.py'
+```
+
+**根因**：`_docker_sandbox` 通过 `-v {host_path}:/sandbox/code.py:ro` 挂载文件到沙箱容器。`host_path` 由 `SANDBOX_TMP_HOST` + 文件名拼成。在 Windows Docker Desktop + WSL2 环境下，宿主机的 `D:\code-review-agent\sandbox-tmp` 在 WSL2 中对应 `/mnt/d/...`，但 Docker Desktop 内部的路径映射不保证与 WSL2 的 `/mnt/` 完全一致。传给 `docker run -v` 的源路径实际不存在时，Docker 不会报错，而是在目标位置**创建一个空目录**。沙箱容器里的 `/sandbox/code.py` 变成了空文件夹而非 Python 脚本，Python 自然报 `can't find '__main__' module`。
+
+**本质问题**：`-v` 文件挂载依赖宿主机的绝对路径，而跨平台（Linux/Windows/Mac）下该路径不可移植。`SANDBOX_TMP_HOST` 这个环境变量本身就是"让用户猜自己系统的正确路径"，本质上是脆弱的。
+
+**修复（根本性）**：弃用 `-v` 文件挂载，改用 stdin 管道传代码。
+
+```python
+# 旧方案：写临时文件 → 构造 host_path → -v 挂载
+'docker', 'run', '--rm',
+'-v', f'{host_path}:/sandbox/code.py:ro',
+'python3', '-W', 'error', '/sandbox/code.py',
+
+# 新方案：stdin 直接传代码，零文件依赖
+'docker', 'run', '--rm', '-i',
+'python3', '-W', 'error', '-',
+input=fixed_code,    # subprocess.run 的 input 参数
+```
+
+`_docker_sandbox` 签名从 `(script_path: str)` 改为 `(fixed_code: str)`，`sandbox_executor` 中 Docker 路径直接传代码字符串，subprocess 降级路径保留原来的临时文件方式。
+
+**连带清理**：
+- `docker-compose.deploy.yml`：删除 `SANDBOX_TMP_HOST`（不再需要）
+- `docs/deploy-guide.md`：删除跨系统路径配置说明
+
+**教训**：Docker 文件挂载的路径在跨平台环境下不可靠，能用 stdin/stdout 管道解决的问题就不要引入文件路径依赖。`docker run -v` 挂载不存在的源路径时**静默创建空目录**而非报错，这个行为非常坑。

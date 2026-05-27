@@ -1,7 +1,7 @@
 """
 B04 验证脚本 #06：regression test —— reflect_node 条件边是否注册了 human_review 分支
 
-在 retry_or_fail 返回 "human_review" 的前提下，确认编译后的图中
+在 retry_or_human 返回 "human_review" 的前提下，确认编译后的图中
 reflect_node 的出边包含到 human_review 的映射，不会触发 KeyError。
 
 用法：python tests/bugfix/b04/test_b04_06_routing_edge_regression.py
@@ -17,7 +17,7 @@ SRC_DIR = str(PROJECT_ROOT / "src")
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-from graph.builder import build_graph, retry_or_fail
+from graph.builder import build_graph, retry_or_human
 from graph.state import INITIAL_STATE
 from config import MAX_RETRY
 
@@ -29,12 +29,12 @@ if __name__ == "__main__":
 
     all_passed = True
 
-    # --- 检测 1：retry_or_fail 返回值正确 ---
-    print("--- 检测 1：retry_or_fail 返回值 ---")
+    # --- 检测 1：retry_or_human 返回值正确 ---
+    print("--- 检测 1：retry_or_human 返回值 ---")
     for rc in range(MAX_RETRY):
         state = dict(INITIAL_STATE)
         state["retry_count"] = rc
-        result = retry_or_fail(state)
+        result = retry_or_human(state)
         ok = (result == "coder_agent")
         print(f"  {'✅' if ok else '❌'} retry_count={rc} → {result}")
         if not ok:
@@ -43,7 +43,7 @@ if __name__ == "__main__":
     for rc in [MAX_RETRY, MAX_RETRY + 1, MAX_RETRY + 5]:
         state = dict(INITIAL_STATE)
         state["retry_count"] = rc
-        result = retry_or_fail(state)
+        result = retry_or_human(state)
         ok = (result == "human_review")
         print(f"  {'✅' if ok else '❌'} retry_count={rc} → {result}")
         if not ok:

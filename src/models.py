@@ -103,6 +103,17 @@ class CodeAnalysis(BaseModel):
     global_statements: list[str] = Field(default_factory=list)    # 模块级关键操作描述
     overview: str = ""                                            # 一句话总结代码功能
 
+    # LLM 输出 null 时兜底，default_factory 只管 key 缺失不管 key=null
+    @field_validator("functions", "classes", "imports", "global_statements", mode="before")
+    @classmethod
+    def default_list_to_empty(cls, v):
+        return v if v is not None else []
+
+    @field_validator("overview", mode="before")
+    @classmethod
+    def missing_string_fallback(cls, v):
+        return v if v is not None else ""
+
 
 # ============================================================
 # 审查 Agent 输出 — 三个审查员共用---（其实就是问题模板）
@@ -210,7 +221,7 @@ class ActionItem(BaseModel):
         return v if v is not None else ""
 
 
-class CriticSummary(BaseModel):#一份原始代码文件对应一份CriticSummary，但又三份ReviewResult
+class CriticSummary(BaseModel):
     """critic_agent 的完整输出 — 去重、排序后的统一修复方案"""
     score_before: int = Field(ge=0, le=100)              # 修复前评分 0-100，Pydantic 自动校验范围
     total_issues: int = Field(ge=0)                      # 去重后问题总数，不能为负数
@@ -230,6 +241,22 @@ class CriticSummary(BaseModel):#一份原始代码文件对应一份CriticSummar
     @classmethod
     def missing_total_issues_fallback(cls, v):
         return v if v is not None else 0
+
+    # LLM 输出 null 时兜底
+    @field_validator("by_severity", mode="before")
+    @classmethod
+    def default_by_severity_to_empty(cls, v):
+        return v if v is not None else {"critical": 0, "high": 0, "medium": 0, "low": 0}
+
+    @field_validator("action_plan", mode="before")
+    @classmethod
+    def default_action_plan_to_empty(cls, v):
+        return v if v is not None else []
+
+    @field_validator("summary", mode="before")
+    @classmethod
+    def missing_summary_fallback(cls, v):
+        return v if v is not None else ""
 
 
 # ============================================================
@@ -259,7 +286,7 @@ class CoderResult(BaseModel):
     """coder_agent 的完整输出 — 修复后的完整代码 + 所有修改记录"""
     fixed_code: str                                          # 修复后的完整代码，整个文件传给 sandbox 执行
     changes: list[ChangeItem] = Field(default_factory=list)  # 所有修改记录，每条是一个 ChangeItem
-    notes: str = ""                                          # 备注：无法自动修复的问题在这里说明
+    notes: str = ""                                          # 作用域变更警告，detect_scope_violations 写入
     # [B01-#04] 因 [需人工] 跳过的条目，每条格式 "行{N}: {问题简述} — {人工需要做什么}"
     skipped_items: list[str] = Field(default_factory=list)
 
@@ -267,6 +294,12 @@ class CoderResult(BaseModel):
     @field_validator("fixed_code", mode="before")
     @classmethod
     def missing_fixed_code_fallback(cls, v):
+        return v if v is not None else ""
+
+    # LLM 输出 notes: null 时兜底
+    @field_validator("notes", mode="before")
+    @classmethod
+    def missing_notes_fallback(cls, v):
         return v if v is not None else ""
 
     # [B03] LLM 返回 "changes": null / "skipped_items": null 兜底为空列表

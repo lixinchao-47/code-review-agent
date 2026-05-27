@@ -179,7 +179,7 @@ def should_continue_or_output(state: AgentState) -> str:
         return "output_node"
     return "coder_agent"
 
-def retry_or_fail(state: AgentState) -> str:
+def retry_or_human(state: AgentState) -> str:
     """反思后的路由判断"""
     if state["retry_count"] < MAX_RETRY:
         return "coder_agent"
@@ -235,7 +235,7 @@ def build_graph() -> StateGraph:
     })
 
     # 反思条件边
-    workflow.add_conditional_edges("reflect_node", retry_or_fail, {
+    workflow.add_conditional_edges("reflect_node", retry_or_human, {
         "coder_agent": "coder_agent",
         "human_review": "human_review",
     })

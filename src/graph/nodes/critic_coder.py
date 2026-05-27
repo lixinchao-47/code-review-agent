@@ -22,7 +22,7 @@ def _strip_fake_tags(summary: CriticSummary) -> None:
     for item in summary.action_plan:
         if "[需人工]" in item.fix_instruction:
             continue
-        if item.fix_instruction.startswith("[修复]"):
+        if item.fix_instruction.startswith("[修复]"): #判断字符串是否以指定前缀开头，返回 True 或 False
             item.fix_instruction = item.fix_instruction[len("[修复]"):].strip()
 
 
@@ -42,39 +42,48 @@ def _guard_credential_manual_tag(summary: CriticSummary) -> None:
 def _detect_scope_violations(original_code: str, fixed_code: str) -> list[str]:
     """检测 coder 是否将函数内语句提升到模块级（改作用域硬禁令兜底）
 
+    ---- 处理流程 ----
+    第一步：AST 解析 —— 把原始代码和修复后代码分别解析为抽象语法树
+    第二步：收集函数内语句 —— 扫描原始 AST，找到所有函数体内的非 import 语句，存入集合
+    第三步：交叉比对 —— 检查修复后代码的模块级（顶层）语句
+           若某条语句在第二步的集合中出现过，说明 coder 把它从函数内提到了全局 → 违规
+
     只放行 import/from import，其余从函数内→模块级的移动一律标记。
     """
+    # ===== 第一步：AST 解析 =====
     if not original_code or not fixed_code:
         return []
     try:
-        orig_tree = ast.parse(original_code)
-        fixed_tree = ast.parse(fixed_code)
+        orig_tree = ast.parse(original_code)    # 原始代码 → AST
+        fixed_tree = ast.parse(fixed_code)      # 修复后代码 → AST
     except SyntaxError:
         return []
 
+    # ===== 第二步：收集原始代码中所有函数体内的非 import 语句 =====
     def _non_import_stmts_in_funcs(tree):
         stmts = set()
-        for node in ast.walk(tree):
+        for node in ast.walk(tree):             # 遍历 AST 每个节点
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                for stmt in node.body:
+                for stmt in node.body:          # 函数体内的每条语句
                     if not isinstance(stmt, (ast.Import, ast.ImportFrom)):
                         try:
-                            stmts.add(ast.unparse(stmt))
+                            stmts.add(ast.unparse(stmt))  # AST 节点 → 文本，存入集合
                         except Exception:
                             pass
-        return stmts
+        return stmts                             # 返回集合，如 {"print(x)", "x = 1"}
 
     func_stmts = _non_import_stmts_in_funcs(orig_tree)
 
+    # ===== 第三步：检查修复后代码的顶层语句是否来自函数内部 =====
     violations = []
-    for stmt in fixed_tree.body:
+    for stmt in fixed_tree.body:                 # 只循环顶层语句（模块级），不深入函数体
         if isinstance(stmt, (ast.Import, ast.ImportFrom)):
-            continue
+            continue                             # import 提到顶层是允许的，放行
         try:
-            unparsed = ast.unparse(stmt)
+            unparsed = ast.unparse(stmt)         # AST 节点 → 文本
         except Exception:
             continue
-        if unparsed in func_stmts:
+        if unparsed in func_stmts:               # 这条语句本该在函数内，却跑到了顶层
             violations.append(f"[作用域变更] L{stmt.lineno}: {unparsed[:100]}")
 
     return violations
@@ -86,8 +95,8 @@ def critic_agent(state: AgentState)->dict:
 
     #把每条Issue展开成可读文本，critic需要看到具体内容才能去重
     issues_text = []
-    for r in state['review_results']:#每个r，是一个审查员的review_result,即共循环三轮
-        for issue in r.issues:#每个issue就是一个Issue，对应一个代码问题
+    for r in state['review_results']:
+        for issue in r.issues:
             #将每个问题的下述信息提取整合成字符串文本，循环将所有问题的文本描述全部整理入issues_text
             issues_text.append(
                 f"[{r.dimension.value}] 行{issue.lineno} {issue.severity.value}"
