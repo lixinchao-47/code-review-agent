@@ -13,7 +13,7 @@
 ```bash
 mkdir -p ~/code-review-agent
 cd ~/code-review-agent
-wget https://raw.githubusercontent.com/my698/code-review-agent/master/docker-compose.deploy.yml
+wget https://raw.githubusercontent.com/lixinchao-47/code-review-agent/master/docker-compose.deploy.yml
 ```
 
 ### 第 2 步：确认 Docker 已安装
@@ -151,7 +151,7 @@ docker stop code-review-agent && docker rm code-review-agent
 
 | 问题 | 原因 | 解决 |
 |---|---|---|
-| `wget` 404 | 仓库名或分支不对 | 浏览器打开 `https://github.com/my698/code-review-agent` 确认存在 |
+| `wget` 404 | 仓库名或分支不对 | 浏览器打开 `https://github.com/lixinchao-47/code-review-agent` 确认存在 |
 | `docker login` 失败 | 密码错 / 网络不通 | 阿里云控制台重置访问凭证 |
 | 启动后访问不了 | 防火墙拦截 | `sudo ufw allow 8501` |
 | 沙箱报"修复代码为空" | `docker.sock` 没挂载 | 确认命令里有 `-v /var/run/docker.sock:/var/run/docker.sock` |
