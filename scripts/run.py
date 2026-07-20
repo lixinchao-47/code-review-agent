@@ -78,7 +78,7 @@ async def run_with_timing(app, config, initial_state):
 
     # [Bug #2] HITL 中断检测：interrupt_before 不抛异常，必须通过 checkpointer 的 .next 判断是否暂停
     state_snapshot = app.get_state(config)
-    if state_snapshot.next:
+    if state_snapshot.next: #interrupt_before声明过的节点才会出现在里面
         print(">>> 暂停在 human_review 节点，等待人工确认...")
         print(">>> (演示模式) 自动批准修复结果")
         app.update_state(config, {"human_feedback": ""})

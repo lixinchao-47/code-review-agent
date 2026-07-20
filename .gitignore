@@ -29,3 +29,12 @@ dist/
 # 个人笔记
 语法笔记.md
 interview-qa.md
+模拟问答.md
+模拟问答_精简版.md
+面试相关.md
+面试相关_精简版.md
+*.pdf
+
+# Claude Code 本地配置
+.claude/
+skills/
